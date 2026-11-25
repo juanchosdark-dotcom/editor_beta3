@@ -757,12 +757,13 @@ class PreviewPlayerController(
   fun evaluatePreviewAudioGainAt(timelinePositionMs: Long): Float? {
     val segments = currentSegments
     if (segments.isEmpty()) return null
+    val inGap = currentVideoGaps.any { timelinePositionMs in it.timelineStartMs until it.timelineEndMs }
     val match =
       segments.firstOrNull { timelinePositionMs in it.timelineStartMs until it.timelineEndMs }
-        ?: return if (currentVideoGaps.any { timelinePositionMs in it.timelineStartMs until it.timelineEndMs }) {
-          0f
+        ?: if (inGap) {
+          return 0f
         } else {
-          null
+          segments.lastOrNull { timelinePositionMs == it.timelineEndMs } ?: return null
         }
     val ctx = match.audioContext
     if (!ctx.isTrackAudible) return 0f

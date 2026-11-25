@@ -35,8 +35,8 @@ data class TimelineViewportErgonomics(
   val hoverTimelineMs: Long? = null,
 ) {
   companion object {
-    const val MIN_ZOOM = 0.5f
-    const val MAX_ZOOM = 4.0f
+    const val MIN_ZOOM = 0.25f
+    const val MAX_ZOOM = 5.0f
     const val FRAME_STEP_30FPS_MS = 33L
     const val FINE_STEP_MS = 100L
     const val COARSE_STEP_MS = 1_000L

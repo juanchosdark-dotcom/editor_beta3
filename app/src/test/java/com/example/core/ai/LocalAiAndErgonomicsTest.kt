@@ -223,5 +223,72 @@ class LocalAiAndErgonomicsTest {
       TimelineErgonomicsHelper.clampZoom(3.5f, 2.0f),
       0.001f,
     )
+    assertEquals(
+      TimelineViewportErgonomics.MIN_ZOOM,
+      TimelineErgonomicsHelper.clampZoom(0.3f, 0.2f),
+      0.001f,
+    )
+    assertEquals(
+      1.0f,
+      TimelineErgonomicsHelper.clampZoom(Float.NaN, Float.POSITIVE_INFINITY),
+      0.001f,
+    )
+  }
+
+  @Test
+  fun `ergonomics helper preserves focal point scroll offset and computes fit zoom scale`() {
+    // At zoom=1.0, scroll=200px, focal point=150px -> timeline px = 350px.
+    // Zooming to 2.0x should place that same timeline moment at scroll=500px (500 + 150 = 650? Wait: (200+150)*2 - 150 = 550px!).
+    val zoomedInScroll =
+      TimelineErgonomicsHelper.calculateFocalAnchoredScrollPx(
+        currentScrollPx = 200f,
+        focalViewportX = 150f,
+        oldZoom = 1.0f,
+        newZoom = 2.0f,
+      )
+    assertEquals(550, zoomedInScroll)
+
+    // Zooming back out 2.0 -> 1.0 returns to 200px
+    val zoomedOutScroll =
+      TimelineErgonomicsHelper.calculateFocalAnchoredScrollPx(
+        currentScrollPx = zoomedInScroll.toFloat(),
+        focalViewportX = 150f,
+        oldZoom = 2.0f,
+        newZoom = 1.0f,
+      )
+    assertEquals(200, zoomedOutScroll)
+
+    // Fit zoom for a 20s timeline inside 300dp viewport: 300 * 0.94 / 20 = 14.1 dp/s -> 14.1 / 56 = ~0.2518f
+    val fitLong =
+      TimelineErgonomicsHelper.calculateFitZoomScale(
+        viewportWidthDp = 300f,
+        totalDurationMs = 20_000L,
+      )
+    assertEquals((300f * 0.94f / 20f) / 56f, fitLong, 0.005f)
+
+    // Very short timeline clamps cleanly at MAX_ZOOM (5.0f)
+    val fitShort =
+      TimelineErgonomicsHelper.calculateFitZoomScale(
+        viewportWidthDp = 800f,
+        totalDurationMs = 1_000L,
+      )
+    assertEquals(TimelineViewportErgonomics.MAX_ZOOM, fitShort, 0.001f)
+  }
+
+  @Test
+  fun `viewmodel fitTimelineZoom adapts scale cleanly within ergonomic bounds`() {
+    val tempRoot = java.nio.file.Files.createTempDirectory("frameline_fit_zoom_").toFile()
+    try {
+      val vm = com.example.ui.editor.TimelineSkeletonViewModel(projectRootDir = tempRoot)
+      vm.fitTimelineZoom(viewportWidthDp = 240f)
+      val scale = vm.uiState.value.ergonomics.zoomScale
+      assertTrue(scale in TimelineViewportErgonomics.MIN_ZOOM..TimelineViewportErgonomics.MAX_ZOOM)
+      assertTrue(scale < 1.0f)
+
+      vm.setTimelineZoom(1.0f)
+      assertEquals(1.0f, vm.uiState.value.ergonomics.zoomScale, 0.001f)
+    } finally {
+      tempRoot.deleteRecursively()
+    }
   }
 }

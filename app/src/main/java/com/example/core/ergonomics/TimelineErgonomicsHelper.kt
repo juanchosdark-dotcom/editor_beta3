@@ -2,11 +2,12 @@ package com.example.core.ergonomics
 
 import com.example.core.model.TimelineState
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
 /**
  * Pure ergonomic math helpers for magnetic snapping, stylus fine-scrubbing sensitivity,
- * and clamped pinch/button timeline zoom.
+ * focal-anchored pinch-to-zoom, and fit-to-timeline zoom calculation.
  */
 object TimelineErgonomicsHelper {
 
@@ -58,9 +59,52 @@ object TimelineErgonomicsHelper {
     return (rawMs * inputMode.scrubSensitivity).roundToLong()
   }
 
-  fun clampZoom(currentScale: Float, factor: Float): Float =
-    (currentScale * factor).coerceIn(
+  fun clampZoom(currentScale: Float, factor: Float): Float {
+    val safeCurrent = if (currentScale.isFinite() && currentScale > 0f) currentScale else 1.0f
+    val safeFactor = if (factor.isFinite() && factor > 0f) factor else 1.0f
+    return (safeCurrent * safeFactor).coerceIn(
       TimelineViewportErgonomics.MIN_ZOOM,
       TimelineViewportErgonomics.MAX_ZOOM,
     )
+  }
+
+  /**
+   * Computes the horizontal scroll offset (px) that keeps the timeline moment under
+   * [focalViewportX] anchored during a pinch-to-zoom transition from [oldZoom] to [newZoom].
+   */
+  fun calculateFocalAnchoredScrollPx(
+    currentScrollPx: Float,
+    focalViewportX: Float,
+    oldZoom: Float,
+    newZoom: Float,
+  ): Int {
+    if (!oldZoom.isFinite() || !newZoom.isFinite() || oldZoom <= 0f || newZoom <= 0f) {
+      return currentScrollPx.coerceAtLeast(0f).roundToInt()
+    }
+    val ratio = newZoom / oldZoom
+    val safeFocalX = focalViewportX.coerceAtLeast(0f)
+    val safeScroll = currentScrollPx.coerceAtLeast(0f)
+    return ((safeScroll + safeFocalX) * ratio - safeFocalX)
+      .roundToInt()
+      .coerceAtLeast(0)
+  }
+
+  /**
+   * Computes a zoom scale so the active timeline duration ([totalDurationMs]) fits cleanly
+   * inside [viewportWidthDp] without horizontal overflow, clamped to valid zoom bounds.
+   */
+  fun calculateFitZoomScale(
+    viewportWidthDp: Float,
+    totalDurationMs: Long,
+    baseDpPerSecond: Float = 56f,
+    paddingFraction: Float = 0.94f,
+  ): Float {
+    if (viewportWidthDp <= 0f || totalDurationMs <= 0L || baseDpPerSecond <= 0f) return 1.0f
+    val durationSec = (totalDurationMs / 1000f).coerceAtLeast(1f)
+    val targetDpPerSecond = (viewportWidthDp * paddingFraction.coerceIn(0.5f, 1f)) / durationSec
+    return (targetDpPerSecond / baseDpPerSecond).coerceIn(
+      TimelineViewportErgonomics.MIN_ZOOM,
+      TimelineViewportErgonomics.MAX_ZOOM,
+    )
+  }
 }

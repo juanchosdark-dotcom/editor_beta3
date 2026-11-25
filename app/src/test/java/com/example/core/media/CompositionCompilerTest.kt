@@ -1,5 +1,6 @@
 package com.example.core.media
 
+import androidx.media3.effect.OverlayEffect
 import com.example.core.media.engine.CompiledCompositionResult
 import com.example.core.media.engine.CompositionCompiler
 import com.example.core.media.model.ExportPreset
@@ -11,12 +12,14 @@ import com.example.core.model.ClipKind
 import com.example.core.model.MediaAsset
 import com.example.core.model.MediaFingerprint
 import com.example.core.model.MediaType
+import com.example.core.model.SubtitleClipConfig
 import com.example.core.model.TimelineClip
 import com.example.core.model.TimelineState
 import com.example.core.model.Track
 import com.example.core.model.TrackType
 import com.example.core.model.VideoClipConfig
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -196,5 +199,78 @@ class CompositionCompilerTest {
     assertEquals(4_700L, videoItem.mediaItem.clippingConfiguration.endPositionMs)
     // MatrixTransformation + RgbAdjustment(opacity) + Brightness + Contrast + HslAdjustment + RgbAdjustment(temp) = 6
     assertEquals(6, exportResult.appliedVideoEffectCount)
+  }
+
+  @Test
+  fun compile_includesSubtitleOverlayEffectAndSplitsPartialAdjustments() {
+    val rootDir = tempFolder.newFolder("sub_adj_proj")
+    val mediaFile = File(rootDir, "media/clip.mp4").apply {
+      parentFile?.mkdirs()
+      writeBytes(byteArrayOf(1, 2, 3, 4))
+    }
+    val asset =
+      MediaAsset(
+        assetId = "a1",
+        type = MediaType.VIDEO,
+        displayName = "clip.mp4",
+        relativePath = "media/${mediaFile.name}",
+        fingerprint = MediaFingerprint(4L, 6_000L, "ghi", "video/mp4"),
+      )
+
+    val timeline =
+      TimelineState(
+        tracks =
+          listOf(
+            Track("adj", TrackType.ADJUSTMENT, 0, "Color"),
+            Track("sub", TrackType.SUBTITLE, 1, "Subs"),
+            Track("v1", TrackType.VIDEO, 2, "Video"),
+          ),
+        clips =
+          listOf(
+            TimelineClip(
+              clipId = "v1",
+              trackId = "v1",
+              kind = ClipKind.VIDEO,
+              label = "Clip",
+              timelineStartMs = 0L,
+              timelineEndMs = 5_000L,
+              sourceInMs = 0L,
+              sourceOutMs = 5_000L,
+              assetId = "a1",
+            ),
+            TimelineClip(
+              clipId = "adj_mid",
+              trackId = "adj",
+              kind = ClipKind.ADJUSTMENT,
+              label = "Mid Color",
+              timelineStartMs = 1_000L,
+              timelineEndMs = 3_500L,
+              adjustmentConfig = AdjustmentClipConfig(contrast = 1.2f),
+            ),
+            TimelineClip(
+              clipId = "sub_1",
+              trackId = "sub",
+              kind = ClipKind.SUBTITLE,
+              label = "Title",
+              timelineStartMs = 500L,
+              timelineEndMs = 3_000L,
+              subtitleConfig = SubtitleClipConfig(text = "Hola FrameLine"),
+            ),
+          ),
+      )
+
+    val exportResult =
+      CompositionCompiler().compile(
+        timeline = timeline,
+        assets = listOf(asset),
+        projectRootDir = rootDir,
+        renderTarget = MediaRenderTarget.Export(ExportPreset.HD_1080P_H264.config),
+      ) as CompiledCompositionResult.Ready
+
+    // Video split into 3 segments: [0..1000], [1000..3500], [3500..5000]
+    assertEquals(3, exportResult.totalVideoItems)
+    assertNotNull(exportResult.renderPlan)
+    assertEquals(1, exportResult.renderPlan!!.subtitleOverlays.size)
+    assertTrue(exportResult.composition.effects.videoEffects.any { it is OverlayEffect })
   }
 }

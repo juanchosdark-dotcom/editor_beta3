@@ -58,6 +58,10 @@ object ColorGradeBounds {
   const val MAX_VIGNETTE = 1.0f
   const val DEFAULT_VIGNETTE = 0.0f
 
+  const val MIN_DEPTH_BLUR = 0.0f
+  const val MAX_DEPTH_BLUR = 1.0f
+  const val DEFAULT_DEPTH_BLUR = 0.0f
+
   const val MIN_LUT_STRENGTH = 0.0f
   const val MAX_LUT_STRENGTH = 1.0f
   const val DEFAULT_LUT_STRENGTH = 1.0f
@@ -103,6 +107,9 @@ object ColorGradeBounds {
   fun clampVignette(value: Float): Float =
     clampFinite(value, MIN_VIGNETTE, MAX_VIGNETTE, DEFAULT_VIGNETTE)
 
+  fun clampDepthBlur(value: Float): Float =
+    clampFinite(value, MIN_DEPTH_BLUR, MAX_DEPTH_BLUR, DEFAULT_DEPTH_BLUR)
+
   fun clampLutStrength(value: Float): Float =
     clampFinite(value, MIN_LUT_STRENGTH, MAX_LUT_STRENGTH, DEFAULT_LUT_STRENGTH)
 
@@ -123,6 +130,7 @@ object ColorGradeBounds {
       shadows = clampShadows(cfg.shadows),
       midtones = clampMidtones(cfg.midtones),
       highlights = clampHighlights(cfg.highlights),
+      depthBlur = clampDepthBlur(cfg.depthBlur),
     )
 
   fun clampAdjustmentColor(cfg: AdjustmentClipConfig): AdjustmentClipConfig =
@@ -140,6 +148,7 @@ object ColorGradeBounds {
       midtones = clampMidtones(cfg.midtones),
       highlights = clampHighlights(cfg.highlights),
       blendOpacity = clampBlendOpacity(cfg.blendOpacity),
+      depthBlur = clampDepthBlur(cfg.depthBlur),
     )
 }
 
@@ -160,6 +169,7 @@ data class ColorGradeStageParams(
   val activeLut: LutPreset? = null,
   val lutStrength: Float = 0.0f,
   val blendOpacity: Float = 1.0f,
+  val depthBlur: Float = 0.0f,
 ) {
   val netBrightnessAndExposure: Float
     get() = (brightness + exposure * 0.35f).coerceIn(-1.0f, 1.0f)
@@ -225,6 +235,7 @@ object ColorGradingEngine {
       highlights = clean.highlights,
       vignette = clean.vignette,
       blendOpacity = 1.0f,
+      depthBlur = clean.depthBlur,
     )
   }
 
@@ -254,6 +265,7 @@ object ColorGradingEngine {
       highlights = clean.highlights * op,
       vignette = clean.vignette * op,
       blendOpacity = op,
+      depthBlur = clean.depthBlur * op,
     )
   }
 
@@ -309,6 +321,8 @@ object ColorGradingEngine {
       ((resolvedClip?.highlights ?: 0f) + (resolvedAdj?.highlights ?: 0f)).coerceIn(-1.0f, 1.0f)
     val combinedVignette =
       ((resolvedClip?.vignette ?: 0f) + (resolvedAdj?.vignette ?: 0f)).coerceIn(0.0f, 1.0f)
+    val combinedDepthBlur =
+      ((resolvedClip?.depthBlur ?: 0f) + (resolvedAdj?.depthBlur ?: 0f)).coerceIn(0.0f, 1.0f)
 
     val combinedEffective =
       EffectiveColorGrading(
@@ -325,6 +339,7 @@ object ColorGradingEngine {
         midtones = combinedMidtones,
         highlights = combinedHighlights,
         blendOpacity = finalOpacity,
+        depthBlur = combinedDepthBlur,
       )
 
     return ResolvedColorPipeline(

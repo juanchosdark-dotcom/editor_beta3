@@ -27,14 +27,19 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Native Android hardware-accelerated implementation of [MediaEngineBackend] powered by
  * Jetpack Media3 [Transformer].
  *
- * All [Transformer] calls are dispatched onto the main Looper as required by Media3 threading
- * guarantees, while progress polling, completion, errors, and safe cancellation are exposed
- * reactively as a Kotlin [Flow].
+ * Guarantees:
+ * - Renders into a per-session intermediate `.tmp.mp4` staging file and atomically promotes it to
+ *   `outputFile` only upon clean `onCompleted`.
+ * - Registers the cancellation handle synchronously *before* posting onto the main Looper so a
+ *   rapid `cancelActiveRender()` before `mainHandler.post` executes never starts orphaned encoders.
+ * - Releases listeners, stops progress pollers, cancels [Transformer], and deletes intermediate
+ *   `.tmp.mp4` / partial files deterministically on completion, failure, cancellation, or flow close.
  */
 @OptIn(UnstableApi::class)
 class Media3EngineBackend(
@@ -43,15 +48,24 @@ class Media3EngineBackend(
 ) : MediaEngineBackend {
 
   private class ActiveRenderSession(
-    val transformer: Transformer,
+    val sessionId: Long,
     val outputFile: File,
+    val stagingFile: File,
     val onCancel: () -> Unit,
   ) {
     val terminated = AtomicBoolean(false)
-    var pollRunnable: Runnable? = null
+    val completedCleanly = AtomicBoolean(false)
+
+    @Volatile var transformer: Transformer? = null
+
+    @Volatile var listener: Transformer.Listener? = null
+
+    @Volatile var pollRunnable: Runnable? = null
   }
 
   private val mainHandler = Handler(Looper.getMainLooper())
+  private val sessionLock = Any()
+  private val sessionSeq = AtomicLong(0L)
 
   @Volatile
   private var activeSession: ActiveRenderSession? = null
@@ -74,8 +88,13 @@ class Media3EngineBackend(
       }
 
       val ready = compiled as CompiledCompositionResult.Ready
-      outputFile.parentFile?.mkdirs()
+      val parentDir = outputFile.parentFile
+      parentDir?.mkdirs()
       if (outputFile.exists()) outputFile.delete()
+
+      val sessionId = sessionSeq.incrementAndGet()
+      val stagingFile = createStagingFile(outputFile, sessionId)
+      if (stagingFile.exists()) stagingFile.delete()
 
       val videoMimeType =
         when (renderTarget) {
@@ -97,25 +116,49 @@ class Media3EngineBackend(
             }
         }
 
-      var createdSession: ActiveRenderSession? = null
+      val session =
+        ActiveRenderSession(
+          sessionId = sessionId,
+          outputFile = outputFile,
+          stagingFile = stagingFile,
+          onCancel = {
+            trySend(RenderProgress.Cancelled)
+            close()
+          },
+        )
+      registerNewActiveSession(session)
 
       mainHandler.post {
-        terminateSessionLocked(activeSession, deletePartialFile = true)
+        if (session.terminated.get()) {
+          cleanupSessionFiles(session, deleteOutputFile = true)
+          return@post
+        }
 
-        var sessionRef: ActiveRenderSession? = null
         val listener =
           object : Transformer.Listener {
             override fun onCompleted(composition: Composition, exportResult: ExportResult) {
-              val session = sessionRef ?: return
               if (!session.terminated.compareAndSet(false, true)) return
-              session.pollRunnable?.let { mainHandler.removeCallbacks(it) }
-              if (activeSession === session) activeSession = null
+              detachAndClearSession(session)
+
+              val promoted = promoteStagingFile(session.stagingFile, session.outputFile)
+              if (!promoted) {
+                cleanupSessionFiles(session, deleteOutputFile = true)
+                trySend(
+                  RenderProgress.Failed(
+                    message = "El archivo renderizado quedó vacío o incompleto al finalizar.",
+                  ),
+                )
+                close()
+                return
+              }
+
+              session.completedCleanly.set(true)
               trySend(RenderProgress.Running(100))
               trySend(
                 RenderProgress.Completed(
-                  outputFile = outputFile,
+                  outputFile = session.outputFile,
                   durationMs = exportResult.durationMs.coerceAtLeast(0L),
-                  fileSizeBytes = outputFile.length(),
+                  fileSizeBytes = session.outputFile.length(),
                 ),
               )
               close()
@@ -126,11 +169,9 @@ class Media3EngineBackend(
               exportResult: ExportResult,
               exportException: ExportException,
             ) {
-              val session = sessionRef ?: return
               if (!session.terminated.compareAndSet(false, true)) return
-              session.pollRunnable?.let { mainHandler.removeCallbacks(it) }
-              if (activeSession === session) activeSession = null
-              if (outputFile.exists()) outputFile.delete()
+              detachAndClearSession(session)
+              cleanupSessionFiles(session, deleteOutputFile = true)
               trySend(
                 RenderProgress.Failed(
                   message = exportException.localizedMessage ?: "Error en Media3 Transformer",
@@ -162,20 +203,16 @@ class Media3EngineBackend(
           }
 
           val transformer = transformerBuilder.build()
-          val session =
-            ActiveRenderSession(
-              transformer = transformer,
-              outputFile = outputFile,
-              onCancel = {
-                trySend(RenderProgress.Cancelled)
-                close()
-              },
-            )
-          sessionRef = session
-          createdSession = session
-          activeSession = session
+          session.listener = listener
+          session.transformer = transformer
 
-          transformer.start(ready.composition, outputFile.absolutePath)
+          if (session.terminated.get()) {
+            detachAndClearSession(session)
+            cleanupSessionFiles(session, deleteOutputFile = true)
+            return@post
+          }
+
+          transformer.start(ready.composition, stagingFile.absolutePath)
 
           val progressHolder = ProgressHolder()
           val poller =
@@ -183,12 +220,12 @@ class Media3EngineBackend(
               override fun run() {
                 if (session.terminated.get()) return
                 val state =
-                  runCatching { session.transformer.getProgress(progressHolder) }
-                    .getOrDefault(Transformer.PROGRESS_STATE_NOT_STARTED)
+                  runCatching { session.transformer?.getProgress(progressHolder) }
+                    .getOrNull() ?: Transformer.PROGRESS_STATE_NOT_STARTED
                 if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
                   trySend(RenderProgress.Running(progressHolder.progress.coerceIn(0, 99)))
                 }
-                if (state != Transformer.PROGRESS_STATE_NOT_STARTED) {
+                if (state != Transformer.PROGRESS_STATE_NOT_STARTED && !session.terminated.get()) {
                   mainHandler.postDelayed(this, PROGRESS_POLL_INTERVAL_MS)
                 }
               }
@@ -196,32 +233,22 @@ class Media3EngineBackend(
           session.pollRunnable = poller
           mainHandler.postDelayed(poller, PROGRESS_POLL_INTERVAL_MS)
         } catch (t: Throwable) {
-          sessionRef?.let { s ->
-            s.terminated.set(true)
-            s.pollRunnable?.let { mainHandler.removeCallbacks(it) }
-            if (activeSession === s) activeSession = null
+          if (session.terminated.compareAndSet(false, true)) {
+            detachAndClearSession(session)
+            cleanupSessionFiles(session, deleteOutputFile = true)
+            trySend(
+              RenderProgress.Failed(
+                message = t.localizedMessage ?: "No se pudo iniciar Media3 Transformer",
+                cause = t,
+              ),
+            )
+            close()
           }
-          if (outputFile.exists()) outputFile.delete()
-          trySend(
-            RenderProgress.Failed(
-              message = t.localizedMessage ?: "No se pudo iniciar Media3 Transformer",
-              cause = t,
-            ),
-          )
-          close()
         }
       }
 
       awaitClose {
-        mainHandler.post {
-          val session = createdSession ?: activeSession
-          if (session != null && session.terminated.compareAndSet(false, true)) {
-            session.pollRunnable?.let { mainHandler.removeCallbacks(it) }
-            runCatching { session.transformer.cancel() }
-            if (activeSession === session) activeSession = null
-            if (session.outputFile.exists()) session.outputFile.delete()
-          }
-        }
+        abortSession(session, notifyCancel = false)
       }
     }
 
@@ -235,6 +262,10 @@ class Media3EngineBackend(
       proxyOutputFile.parentFile?.mkdirs()
       if (proxyOutputFile.exists()) proxyOutputFile.delete()
 
+      val sessionId = sessionSeq.incrementAndGet()
+      val stagingFile = createStagingFile(proxyOutputFile, sessionId)
+      if (stagingFile.exists()) stagingFile.delete()
+
       val editedItem =
         EditedMediaItem.Builder(MediaItem.fromUri(sourceFile.toURI().toString()))
           .setEffects(
@@ -245,25 +276,45 @@ class Media3EngineBackend(
           )
           .build()
 
-      var createdSession: ActiveRenderSession? = null
+      val session =
+        ActiveRenderSession(
+          sessionId = sessionId,
+          outputFile = proxyOutputFile,
+          stagingFile = stagingFile,
+          onCancel = {
+            trySend(RenderProgress.Cancelled)
+            close()
+          },
+        )
+      registerNewActiveSession(session)
 
       mainHandler.post {
-        terminateSessionLocked(activeSession, deletePartialFile = true)
+        if (session.terminated.get()) {
+          cleanupSessionFiles(session, deleteOutputFile = true)
+          return@post
+        }
 
-        var sessionRef: ActiveRenderSession? = null
         val listener =
           object : Transformer.Listener {
             override fun onCompleted(composition: Composition, exportResult: ExportResult) {
-              val session = sessionRef ?: return
               if (!session.terminated.compareAndSet(false, true)) return
-              session.pollRunnable?.let { mainHandler.removeCallbacks(it) }
-              if (activeSession === session) activeSession = null
+              detachAndClearSession(session)
+
+              val promoted = promoteStagingFile(session.stagingFile, session.outputFile)
+              if (!promoted) {
+                cleanupSessionFiles(session, deleteOutputFile = true)
+                trySend(RenderProgress.Failed("El archivo proxy generado quedó vacío."))
+                close()
+                return
+              }
+
+              session.completedCleanly.set(true)
               trySend(RenderProgress.Running(100))
               trySend(
                 RenderProgress.Completed(
-                  outputFile = proxyOutputFile,
+                  outputFile = session.outputFile,
                   durationMs = exportResult.durationMs.coerceAtLeast(0L),
-                  fileSizeBytes = proxyOutputFile.length(),
+                  fileSizeBytes = session.outputFile.length(),
                 ),
               )
               close()
@@ -274,11 +325,9 @@ class Media3EngineBackend(
               exportResult: ExportResult,
               exportException: ExportException,
             ) {
-              val session = sessionRef ?: return
               if (!session.terminated.compareAndSet(false, true)) return
-              session.pollRunnable?.let { mainHandler.removeCallbacks(it) }
-              if (activeSession === session) activeSession = null
-              if (proxyOutputFile.exists()) proxyOutputFile.delete()
+              detachAndClearSession(session)
+              cleanupSessionFiles(session, deleteOutputFile = true)
               trySend(
                 RenderProgress.Failed(
                   message = exportException.localizedMessage ?: "Error al generar proxy",
@@ -296,21 +345,16 @@ class Media3EngineBackend(
               .setAudioMimeType(MimeTypes.AUDIO_AAC)
               .addListener(listener)
               .build()
+          session.listener = listener
+          session.transformer = transformer
 
-          val session =
-            ActiveRenderSession(
-              transformer = transformer,
-              outputFile = proxyOutputFile,
-              onCancel = {
-                trySend(RenderProgress.Cancelled)
-                close()
-              },
-            )
-          sessionRef = session
-          createdSession = session
-          activeSession = session
+          if (session.terminated.get()) {
+            detachAndClearSession(session)
+            cleanupSessionFiles(session, deleteOutputFile = true)
+            return@post
+          }
 
-          transformer.start(editedItem, proxyOutputFile.absolutePath)
+          transformer.start(editedItem, stagingFile.absolutePath)
 
           val progressHolder = ProgressHolder()
           val poller =
@@ -318,12 +362,12 @@ class Media3EngineBackend(
               override fun run() {
                 if (session.terminated.get()) return
                 val state =
-                  runCatching { session.transformer.getProgress(progressHolder) }
-                    .getOrDefault(Transformer.PROGRESS_STATE_NOT_STARTED)
+                  runCatching { session.transformer?.getProgress(progressHolder) }
+                    .getOrNull() ?: Transformer.PROGRESS_STATE_NOT_STARTED
                 if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
                   trySend(RenderProgress.Running(progressHolder.progress.coerceIn(0, 99)))
                 }
-                if (state != Transformer.PROGRESS_STATE_NOT_STARTED) {
+                if (state != Transformer.PROGRESS_STATE_NOT_STARTED && !session.terminated.get()) {
                   mainHandler.postDelayed(this, PROGRESS_POLL_INTERVAL_MS)
                 }
               }
@@ -331,57 +375,133 @@ class Media3EngineBackend(
           session.pollRunnable = poller
           mainHandler.postDelayed(poller, PROGRESS_POLL_INTERVAL_MS)
         } catch (t: Throwable) {
-          sessionRef?.let { s ->
-            s.terminated.set(true)
-            s.pollRunnable?.let { mainHandler.removeCallbacks(it) }
-            if (activeSession === s) activeSession = null
+          if (session.terminated.compareAndSet(false, true)) {
+            detachAndClearSession(session)
+            cleanupSessionFiles(session, deleteOutputFile = true)
+            trySend(
+              RenderProgress.Failed(
+                message = t.localizedMessage ?: "No se pudo iniciar generación de proxy",
+                cause = t,
+              ),
+            )
+            close()
           }
-          if (proxyOutputFile.exists()) proxyOutputFile.delete()
-          trySend(
-            RenderProgress.Failed(
-              message = t.localizedMessage ?: "No se pudo iniciar generación de proxy",
-              cause = t,
-            ),
-          )
-          close()
         }
       }
 
       awaitClose {
-        mainHandler.post {
-          val session = createdSession ?: activeSession
-          if (session != null && session.terminated.compareAndSet(false, true)) {
-            session.pollRunnable?.let { mainHandler.removeCallbacks(it) }
-            runCatching { session.transformer.cancel() }
-            if (activeSession === session) activeSession = null
-            if (session.outputFile.exists()) session.outputFile.delete()
-          }
-        }
+        abortSession(session, notifyCancel = false)
       }
     }
 
   override fun cancelActiveRender() {
-    mainHandler.post {
-      terminateSessionLocked(activeSession, deletePartialFile = true)
+    val current = synchronized(sessionLock) { activeSession }
+    if (current != null) {
+      abortSession(current, notifyCancel = true)
     }
   }
 
-  private fun terminateSessionLocked(
-    session: ActiveRenderSession?,
-    deletePartialFile: Boolean,
-  ) {
-    if (session == null) return
-    if (!session.terminated.compareAndSet(false, true)) return
-    session.pollRunnable?.let { mainHandler.removeCallbacks(it) }
-    runCatching { session.transformer.cancel() }
-    if (activeSession === session) activeSession = null
-    if (deletePartialFile && session.outputFile.exists()) {
-      session.outputFile.delete()
+  private fun registerNewActiveSession(newSession: ActiveRenderSession) {
+    val previous: ActiveRenderSession?
+    synchronized(sessionLock) {
+      previous = activeSession
+      activeSession = newSession
     }
-    session.onCancel()
+    if (previous != null && previous !== newSession) {
+      abortSession(previous, notifyCancel = true)
+    }
+  }
+
+  private fun abortSession(
+    session: ActiveRenderSession,
+    notifyCancel: Boolean,
+  ) {
+    if (!session.terminated.compareAndSet(false, true)) {
+      if (!session.completedCleanly.get()) {
+        cleanupSessionFiles(session, deleteOutputFile = true)
+      }
+      return
+    }
+
+    val releaseBlock = {
+      detachAndClearSession(session)
+      runCatching { session.transformer?.cancel() }
+      session.transformer = null
+      cleanupSessionFiles(session, deleteOutputFile = true)
+    }
+
+    if (Looper.myLooper() == Looper.getMainLooper()) {
+      releaseBlock()
+    } else {
+      mainHandler.post(releaseBlock)
+    }
+
+    if (notifyCancel) {
+      session.onCancel()
+    }
+  }
+
+  private fun detachAndClearSession(session: ActiveRenderSession) {
+    session.pollRunnable?.let { mainHandler.removeCallbacks(it) }
+    session.pollRunnable = null
+    val transformer = session.transformer
+    val listener = session.listener
+    if (transformer != null && listener != null) {
+      runCatching { transformer.removeListener(listener) }
+    }
+    session.listener = null
+    synchronized(sessionLock) {
+      if (activeSession === session) {
+        activeSession = null
+      }
+    }
+  }
+
+  private fun createStagingFile(outputFile: File, sessionId: Long): File {
+    val parent = outputFile.parentFile ?: File(".")
+    return File(parent, ".${outputFile.nameWithoutExtension}_s${sessionId}${STAGING_TEMP_SUFFIX}")
+  }
+
+  private fun promoteStagingFile(stagingFile: File, outputFile: File): Boolean {
+    if (!stagingFile.exists() || stagingFile.length() <= 0L) return false
+    outputFile.parentFile?.mkdirs()
+    if (outputFile.exists() && !outputFile.delete()) {
+      return false
+    }
+    if (stagingFile.renameTo(outputFile)) {
+      return outputFile.exists() && outputFile.length() > 0L
+    }
+    return runCatching {
+      stagingFile.inputStream().use { input ->
+        outputFile.outputStream().use { output ->
+          input.copyTo(output)
+        }
+      }
+      stagingFile.delete()
+      outputFile.exists() && outputFile.length() > 0L
+    }.getOrElse {
+      if (outputFile.exists()) outputFile.delete()
+      false
+    }
+  }
+
+  private fun cleanupSessionFiles(
+    session: ActiveRenderSession,
+    deleteOutputFile: Boolean,
+  ) {
+    runCatching {
+      if (session.stagingFile.exists()) session.stagingFile.delete()
+    }
+    if (deleteOutputFile) {
+      runCatching {
+        if (session.outputFile.exists()) session.outputFile.delete()
+      }
+    }
   }
 
   companion object {
     private const val PROGRESS_POLL_INTERVAL_MS = 200L
+    const val STAGING_TEMP_SUFFIX = ".tmp.mp4"
   }
 }
+

@@ -106,6 +106,7 @@ class AttributeTransferEngine {
               midtones = cfg.midtones,
               highlights = cfg.highlights,
               blendOpacity = 1.0f,
+              depthBlur = cfg.depthBlur,
             )
           }
           else -> null
@@ -239,6 +240,7 @@ class AttributeTransferEngine {
                   shadows = srcColor.shadows,
                   midtones = srcColor.midtones,
                   highlights = srcColor.highlights,
+                  depthBlur = srcColor.depthBlur,
                 ),
             )
         }

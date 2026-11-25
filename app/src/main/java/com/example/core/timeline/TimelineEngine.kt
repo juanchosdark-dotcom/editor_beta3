@@ -9,6 +9,8 @@ import com.example.core.model.EditModeOptions
 import com.example.core.model.KeyframeInterpolation
 import com.example.core.model.MarkerColor
 import com.example.core.model.RippleScope
+import com.example.core.model.SpeedCurveEngine
+import com.example.core.model.SpeedCurvePoint
 import com.example.core.model.SubtitleClipConfig
 import com.example.core.model.TimelineClip
 import com.example.core.model.TimelineMarker
@@ -141,20 +143,64 @@ class TimelineEngine(
     val leftTimelineDuration = splitMs - clip.timelineStartMs
     val rightTimelineDuration = clip.timelineEndMs - splitMs
     val hasMediaSource = clip.kind == ClipKind.VIDEO || clip.kind == ClipKind.AUDIO
+    val oldSourceSpan = clip.sourceSpanMs
     val sourceSplitMs =
       if (hasMediaSource) {
-        (clip.sourceInMs + (leftTimelineDuration * clip.speed).roundToLong()).coerceIn(
-          clip.sourceInMs,
-          clip.sourceOutMs,
-        )
+        if (clip.hasVariableSpeed && oldSourceSpan > 0L) {
+          val relSource =
+            SpeedCurveEngine.timelineOffsetMsToSourceMs(
+              timelineOffsetMs = leftTimelineDuration,
+              sourceSpanMs = oldSourceSpan,
+              baseSpeed = clip.speed,
+              speedCurve = clip.speedCurve,
+            )
+          (clip.sourceInMs + relSource).coerceIn(clip.sourceInMs, clip.sourceOutMs)
+        } else {
+          (clip.sourceInMs + (leftTimelineDuration * clip.speed).roundToLong()).coerceIn(
+            clip.sourceInMs,
+            clip.sourceOutMs,
+          )
+        }
       } else {
         0L
+      }
+
+    val leftCurve =
+      if (hasMediaSource && clip.hasVariableSpeed) {
+        SpeedCurveEngine.sliceCurveForSourceRange(
+          speedCurve = clip.speedCurve,
+          baseSpeed = clip.speed,
+          oldSourceSpanMs = oldSourceSpan,
+          subSourceStartMs = 0L,
+          subSourceEndMs = (sourceSplitMs - clip.sourceInMs).coerceAtLeast(1L),
+        )
+      } else {
+        emptyList()
+      }
+    val rightCurve =
+      if (hasMediaSource && clip.hasVariableSpeed) {
+        SpeedCurveEngine.sliceCurveForSourceRange(
+          speedCurve = clip.speedCurve,
+          baseSpeed = clip.speed,
+          oldSourceSpanMs = oldSourceSpan,
+          subSourceStartMs = (sourceSplitMs - clip.sourceInMs).coerceIn(0L, oldSourceSpan),
+          subSourceEndMs = oldSourceSpan,
+        )
+      } else {
+        emptyList()
       }
 
     val leftRaw =
       clip.copy(
         timelineEndMs = splitMs,
         sourceOutMs = if (hasMediaSource) sourceSplitMs else clip.sourceOutMs,
+        speed =
+          if (leftCurve.size >= 2) {
+            SpeedCurveEngine.averageEffectiveSpeed((sourceSplitMs - clip.sourceInMs).coerceAtLeast(1L), clip.speed, leftCurve)
+          } else {
+            clip.speed
+          },
+        speedCurve = leftCurve,
         videoConfig =
           clip.videoConfig?.let { cfg ->
             cfg.copy(
@@ -184,6 +230,13 @@ class TimelineEngine(
         clipId = idGenerator(),
         timelineStartMs = splitMs,
         sourceInMs = if (hasMediaSource) sourceSplitMs else clip.sourceInMs,
+        speed =
+          if (rightCurve.size >= 2) {
+            SpeedCurveEngine.averageEffectiveSpeed((clip.sourceOutMs - sourceSplitMs).coerceAtLeast(1L), clip.speed, rightCurve)
+          } else {
+            clip.speed
+          },
+        speedCurve = rightCurve,
         videoConfig =
           clip.videoConfig?.let { cfg ->
             cfg.copy(
@@ -378,18 +431,62 @@ class TimelineEngine(
     val hasMediaSource = target.kind == ClipKind.VIDEO || target.kind == ClipKind.AUDIO
     val startDeltaTimeline = proposedStart - target.timelineStartMs
     val endDeltaTimeline = proposedEnd - target.timelineEndMs
+    val oldSourceSpan = target.sourceSpanMs
 
-    val newSourceIn =
-      if (hasMediaSource) {
-        target.sourceInMs + (startDeltaTimeline * target.speed).roundToLong()
+    val (newSourceIn, newSourceOut, trimmedCurve) =
+      if (hasMediaSource && target.hasVariableSpeed && oldSourceSpan > 0L) {
+        val trimLeftSource =
+          if (startDeltaTimeline >= 0L) {
+            SpeedCurveEngine.timelineOffsetMsToSourceMs(
+              timelineOffsetMs = startDeltaTimeline,
+              sourceSpanMs = oldSourceSpan,
+              baseSpeed = target.speed,
+              speedCurve = target.speedCurve,
+            )
+          } else {
+            (startDeltaTimeline * target.speed).roundToLong()
+          }
+        val trimEndSource =
+          if (endDeltaTimeline <= 0L) {
+            val endRelTimeline = (target.durationMs + endDeltaTimeline).coerceAtLeast(0L)
+            SpeedCurveEngine.timelineOffsetMsToSourceMs(
+              timelineOffsetMs = endRelTimeline,
+              sourceSpanMs = oldSourceSpan,
+              baseSpeed = target.speed,
+              speedCurve = target.speedCurve,
+            ) - oldSourceSpan
+          } else {
+            (endDeltaTimeline * target.speed).roundToLong()
+          }
+        val computedIn = target.sourceInMs + trimLeftSource
+        val computedOut = target.sourceOutMs + trimEndSource
+        val slicedCurve =
+          if (computedIn >= target.sourceInMs && computedOut <= target.sourceOutMs && computedOut > computedIn) {
+            SpeedCurveEngine.sliceCurveForSourceRange(
+              speedCurve = target.speedCurve,
+              baseSpeed = target.speed,
+              oldSourceSpanMs = oldSourceSpan,
+              subSourceStartMs = computedIn - target.sourceInMs,
+              subSourceEndMs = computedOut - target.sourceInMs,
+            )
+          } else {
+            target.speedCurve
+          }
+        Triple(computedIn, computedOut, slicedCurve)
       } else {
-        target.sourceInMs
-      }
-    val newSourceOut =
-      if (hasMediaSource) {
-        target.sourceOutMs + (endDeltaTimeline * target.speed).roundToLong()
-      } else {
-        target.sourceOutMs
+        val computedIn =
+          if (hasMediaSource) {
+            target.sourceInMs + (startDeltaTimeline * target.speed).roundToLong()
+          } else {
+            target.sourceInMs
+          }
+        val computedOut =
+          if (hasMediaSource) {
+            target.sourceOutMs + (endDeltaTimeline * target.speed).roundToLong()
+          } else {
+            target.sourceOutMs
+          }
+        Triple(computedIn, computedOut, target.speedCurve)
       }
 
     if (hasMediaSource) {
@@ -428,6 +525,12 @@ class TimelineEngine(
             },
         )
       }
+    val nextEffectiveSpeed =
+      if (hasMediaSource && trimmedCurve.size >= 2) {
+        SpeedCurveEngine.averageEffectiveSpeed((newSourceOut - newSourceIn).coerceAtLeast(1L), target.speed, trimmedCurve)
+      } else {
+        target.speed
+      }
     val effectiveClip =
       if (ripple && newStartMs != null && newEndMs == null) {
         // Ripple trim-in keeps clip anchored at original timelineStartMs and closes the left gap.
@@ -435,6 +538,8 @@ class TimelineEngine(
           timelineEndMs = target.timelineStartMs + newDurationMs,
           sourceInMs = newSourceIn,
           sourceOutMs = newSourceOut,
+          speed = nextEffectiveSpeed,
+          speedCurve = trimmedCurve,
         )
       } else {
         remappedTarget.copy(
@@ -442,6 +547,8 @@ class TimelineEngine(
           timelineEndMs = proposedEnd,
           sourceInMs = newSourceIn,
           sourceOutMs = newSourceOut,
+          speed = nextEffectiveSpeed,
+          speedCurve = trimmedCurve,
         )
       }
 
@@ -547,7 +654,24 @@ class TimelineEngine(
     if (safeOut <= safeIn) {
       return TimelineOperationResult.Rejected(RejectionReason.INVALID_BOUNDS)
     }
-    val newTimelineDuration = ((safeOut - safeIn) / target.speed).roundToLong()
+    val slicedCurve =
+      if (target.hasVariableSpeed && target.sourceSpanMs > 0L) {
+        SpeedCurveEngine.sliceCurveForSourceRange(
+          speedCurve = target.speedCurve,
+          baseSpeed = target.speed,
+          oldSourceSpanMs = target.sourceSpanMs,
+          subSourceStartMs = (safeIn - target.sourceInMs).coerceIn(0L, target.sourceSpanMs),
+          subSourceEndMs = (safeOut - target.sourceInMs).coerceIn(0L, target.sourceSpanMs),
+        )
+      } else {
+        emptyList()
+      }
+    val newTimelineDuration =
+      SpeedCurveEngine.renderedDurationMs(
+        sourceSpanMs = safeOut - safeIn,
+        baseSpeed = target.speed,
+        speedCurve = slicedCurve,
+      )
     if (newTimelineDuration < minClipDurationMs) {
       return TimelineOperationResult.Rejected(RejectionReason.SEGMENT_TOO_SHORT)
     }
@@ -570,6 +694,13 @@ class TimelineEngine(
         timelineEndMs = newTimelineEnd,
         sourceInMs = safeIn,
         sourceOutMs = safeOut,
+        speed =
+          if (slicedCurve.size >= 2) {
+            SpeedCurveEngine.averageEffectiveSpeed(safeOut - safeIn, target.speed, slicedCurve)
+          } else {
+            target.speed
+          },
+        speedCurve = slicedCurve,
         videoConfig =
           remappedTarget.videoConfig?.let { cfg ->
             cfg.copy(
@@ -1011,6 +1142,111 @@ class TimelineEngine(
     val updatedTarget =
       rescaledTarget.copy(
         speed = safeSpeed,
+        speedCurve = emptyList(),
+        timelineEndMs = newEndMs,
+      )
+
+    val lockedTrackIds = state.tracks.filter { it.isLocked }.mapTo(mutableSetOf()) { it.trackId }
+    val others = state.clips.filterNot { it.clipId == clipId }
+    val updatedOthers =
+      if (ripple && netDurationDelta != 0L) {
+        val pivotMs = target.timelineEndMs
+        if (netDurationDelta < 0L) {
+          shiftDownstreamClipsLeft(
+            clips = others,
+            pivotMs = pivotMs,
+            shiftLeftMs = -netDurationDelta,
+            targetTrackId = target.trackId,
+            scope = scope,
+            lockedTrackIds = lockedTrackIds,
+          )
+        } else {
+          others.map { existing ->
+            val shouldShiftTrack =
+              when (scope) {
+                RippleScope.SAME_TRACK -> existing.trackId == target.trackId
+                RippleScope.ALL_TRACKS -> existing.trackId !in lockedTrackIds
+              }
+            if (shouldShiftTrack && !existing.isLocked && existing.timelineStartMs >= pivotMs) {
+              existing.copy(
+                timelineStartMs = existing.timelineStartMs + netDurationDelta,
+                timelineEndMs = existing.timelineEndMs + netDurationDelta,
+              )
+            } else {
+              existing
+            }
+          }
+        }
+      } else {
+        others
+      }
+
+    return TimelineOperationResult.Success(
+      newState = state.copy(clips = (updatedOthers + updatedTarget).sortedBy { it.timelineStartMs }),
+      affectedClipIds = listOf(clipId),
+    )
+  }
+
+  /**
+   * Applies a piecewise-linear variable [speedCurve] to [clipId], analytically recomputing
+   * rendered duration, rescaling keyframes, and ripple-shifting downstream clips when enabled.
+   */
+  fun updateClipSpeedCurve(
+    state: TimelineState,
+    clipId: String,
+    speedCurve: List<SpeedCurvePoint>,
+    ripple: Boolean = state.editOptions.rippleEnabled,
+    scope: RippleScope = state.editOptions.rippleScope,
+  ): TimelineOperationResult {
+    val target = state.clips.find { it.clipId == clipId }
+      ?: return TimelineOperationResult.Rejected(RejectionReason.CLIP_NOT_FOUND)
+    val track = state.tracks.find { it.trackId == target.trackId }
+    if (track?.isLocked == true) {
+      return TimelineOperationResult.Rejected(RejectionReason.TRACK_LOCKED)
+    }
+    if (target.isLocked) {
+      return TimelineOperationResult.Rejected(RejectionReason.CLIP_LOCKED)
+    }
+    if (target.kind != ClipKind.VIDEO && target.kind != ClipKind.AUDIO) {
+      return TimelineOperationResult.Rejected(RejectionReason.INVALID_BOUNDS)
+    }
+
+    if (speedCurve.size < 2) {
+      return updateClipSpeed(state, clipId, target.speed, ripple = ripple, scope = scope)
+    }
+
+    val normalizedCurve = SpeedCurveEngine.normalizeCurve(speedCurve, target.speed)
+    val effectiveSourceSpan =
+      if (target.sourceSpanMs > 0L) {
+        target.sourceSpanMs
+      } else {
+        (target.durationMs * target.speed).roundToLong().coerceAtLeast(minClipDurationMs)
+      }
+    val newDurationMs =
+      SpeedCurveEngine.renderedDurationMs(
+        sourceSpanMs = effectiveSourceSpan,
+        baseSpeed = target.speed,
+        speedCurve = normalizedCurve,
+      ).coerceAtLeast(minClipDurationMs)
+    val avgSpeed =
+      SpeedCurveEngine.averageEffectiveSpeed(
+        sourceSpanMs = effectiveSourceSpan,
+        baseSpeed = target.speed,
+        speedCurve = normalizedCurve,
+      )
+    val newEndMs = target.timelineStartMs + newDurationMs
+    val netDurationDelta = newDurationMs - target.durationMs
+
+    val rescaledTarget =
+      KeyframeTimelineOps.rescaleClipKeyframesForDuration(
+        clip = target,
+        oldDurationMs = target.durationMs,
+        newDurationMs = newDurationMs,
+      )
+    val updatedTarget =
+      rescaledTarget.copy(
+        speed = avgSpeed,
+        speedCurve = normalizedCurve,
         timelineEndMs = newEndMs,
       )
 

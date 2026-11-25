@@ -8,9 +8,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -18,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
@@ -32,6 +35,7 @@ import androidx.compose.material.icons.filled.Diamond
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.FileCopy
+import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.HighQuality
@@ -79,8 +83,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.core.ergonomics.InputDeviceMode
@@ -112,6 +119,7 @@ internal fun StudioHeaderBar(
   onToggleProxies: () -> Unit,
   onToggleLoop: () -> Unit,
   onOpenShortcuts: () -> Unit,
+  compactSingleRow: Boolean = false,
 ) {
   var showPlaybackSettings by remember { mutableStateOf(false) }
 
@@ -121,17 +129,21 @@ internal fun StudioHeaderBar(
   ) {
     Column(modifier = Modifier.fillMaxWidth()) {
       Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .padding(
+              horizontal = if (compactSingleRow) 10.dp else 12.dp,
+              vertical = if (compactSingleRow) 2.dp else 4.dp,
+            ),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
       ) {
-        Column(
-          modifier = Modifier.weight(1f),
-          verticalArrangement = Arrangement.spacedBy(3.dp),
-        ) {
+        if (compactSingleRow) {
           Row(
+            modifier = Modifier.weight(1f).padding(end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
           ) {
             Text(
               text = projectName,
@@ -155,12 +167,6 @@ internal fun StudioHeaderBar(
                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
               )
             }
-          }
-
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-          ) {
             Surface(
               color = MaterialTheme.colorScheme.surfaceContainerLowest,
               shape = RoundedCornerShape(6.dp),
@@ -184,12 +190,80 @@ internal fun StudioHeaderBar(
                 )
               }
             }
-
             Text(
               text = "${renderSettings.previewQuality.targetHeight}p",
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
+              maxLines = 1,
             )
+          }
+        } else {
+          Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+          ) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              Text(
+                text = projectName,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+              )
+              Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = RoundedCornerShape(4.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.testTag("input_mode_badge"),
+              ) {
+                Text(
+                  text = inputMode.label,
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.secondary,
+                  modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+                )
+              }
+            }
+
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                shape = RoundedCornerShape(6.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                modifier = Modifier.testTag("header_timecode_readout"),
+              ) {
+                Row(
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                ) {
+                  Text(
+                    text = formatTimecode(playheadMs),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                  )
+                  Text(
+                    text = " / ${formatTimecode(totalDurationMs)}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                }
+              }
+
+              Text(
+                text = "${renderSettings.previewQuality.targetHeight}p",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
           }
         }
 
@@ -349,8 +423,14 @@ internal fun ActivePreviewSummaryCard(
   onZoomOut: () -> Unit,
   onZoomIn: () -> Unit,
   onResetZoom: () -> Unit,
+  onFitZoom: () -> Unit = {},
   onOpenShortcuts: () -> Unit,
   onQuickOpenColorLut: () -> Unit,
+  modifier: Modifier = Modifier,
+  compact: Boolean = false,
+  fillAvailableHeight: Boolean = false,
+  outerHorizontalPadding: Dp = 12.dp,
+  outerVerticalPadding: Dp = 2.dp,
 ) {
   val totalMs = uiState.timeline.totalDurationMs.coerceAtLeast(1_000L)
   val selectedClip = uiState.selectedClip
@@ -410,11 +490,22 @@ internal fun ActivePreviewSummaryCard(
     color = MaterialTheme.colorScheme.surface,
     shape = RoundedCornerShape(10.dp),
     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+    modifier =
+      modifier
+        .fillMaxWidth()
+        .let { if (fillAvailableHeight) it.fillMaxHeight() else it }
+        .padding(horizontal = outerHorizontalPadding, vertical = outerVerticalPadding),
   ) {
     Column(
-      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-      verticalArrangement = Arrangement.spacedBy(4.dp),
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .let { if (fillAvailableHeight) it.fillMaxHeight().verticalScroll(rememberScrollState()) else it }
+          .padding(
+            horizontal = if (compact) 8.dp else 10.dp,
+            vertical = if (compact) 4.dp else 6.dp,
+          ),
+      verticalArrangement = Arrangement.spacedBy(if (compact) 3.dp else 4.dp),
     ) {
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -515,11 +606,7 @@ internal fun ActivePreviewSummaryCard(
         }
       }
 
-      Row(
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
+      val controlsContent: @Composable () -> Unit = {
         AssistChip(
           onClick = onCyclePreviewQuality,
           leadingIcon = {
@@ -584,7 +671,12 @@ internal fun ActivePreviewSummaryCard(
           modifier = Modifier.testTag("snap_toggle_chip"),
         )
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+          val resetZoomCd = stringResource(R.string.cd_reset_zoom)
+          val fitZoomCd = stringResource(R.string.cd_fit_zoom)
           IconButton(
             onClick = onZoomOut,
             modifier = Modifier.minimumInteractiveComponentSize().testTag("zoom_out_button"),
@@ -597,7 +689,10 @@ internal fun ActivePreviewSummaryCard(
           AssistChip(
             onClick = onResetZoom,
             label = { Text("${zoomPct}%") },
-            modifier = Modifier.testTag("zoom_reset_chip"),
+            modifier =
+              Modifier
+                .semantics { contentDescription = resetZoomCd }
+                .testTag("zoom_reset_chip"),
           )
           IconButton(
             onClick = onZoomIn,
@@ -608,6 +703,21 @@ internal fun ActivePreviewSummaryCard(
               contentDescription = stringResource(R.string.cd_zoom_in),
             )
           }
+          AssistChip(
+            onClick = onFitZoom,
+            leadingIcon = {
+              Icon(
+                imageVector = Icons.Default.FitScreen,
+                contentDescription = null,
+                modifier = Modifier.size(15.dp),
+              )
+            },
+            label = { Text(stringResource(R.string.action_fit_zoom)) },
+            modifier =
+              Modifier
+                .semantics { contentDescription = fitZoomCd }
+                .testTag("zoom_fit_button"),
+          )
         }
 
         IconButton(
@@ -639,6 +749,24 @@ internal fun ActivePreviewSummaryCard(
             imageVector = Icons.Default.Keyboard,
             contentDescription = stringResource(R.string.cd_keyboard_shortcuts),
           )
+        }
+      }
+
+      if (compact && fillAvailableHeight) {
+        FlowRow(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(4.dp),
+          verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+          controlsContent()
+        }
+      } else {
+        Row(
+          modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          controlsContent()
         }
       }
 
@@ -683,6 +811,184 @@ internal fun ActivePreviewSummaryCard(
           onStepForwardFrame = onStepForwardFrame,
           onToggleLoop = onToggleLoop,
         )
+      }
+    }
+  }
+}
+
+@Composable
+internal fun CompactLandscapeTransportStrip(
+  uiState: TimelineSkeletonUiState,
+  previewState: PreviewPlayerState,
+  onBeginScrub: () -> Unit,
+  onPlayheadScrub: (Long) -> Unit,
+  onEndScrub: () -> Unit,
+  onSeekToStart: () -> Unit,
+  onStepBackFrame: () -> Unit,
+  onTogglePlayPause: () -> Unit,
+  onStepForwardFrame: () -> Unit,
+  onToggleLoop: () -> Unit,
+  onToggleSnap: () -> Unit,
+  onResetZoom: () -> Unit,
+  onFitZoom: () -> Unit,
+  modifier: Modifier = Modifier,
+  outerHorizontalPadding: Dp = 8.dp,
+) {
+  val totalMs = uiState.timeline.totalDurationMs.coerceAtLeast(1_000L)
+  val zoomPct = (uiState.ergonomics.zoomScale * 100f).roundToInt()
+  val isLoopEnabled = uiState.isPreviewLoopEnabled || previewState.isLoopEnabled
+  val resetZoomCd = stringResource(R.string.cd_reset_zoom)
+  val fitZoomCd = stringResource(R.string.cd_fit_zoom)
+
+  Surface(
+    color = MaterialTheme.colorScheme.surface,
+    shape = RoundedCornerShape(10.dp),
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    modifier =
+      modifier
+        .fillMaxWidth()
+        .padding(horizontal = outerHorizontalPadding, vertical = 2.dp)
+        .testTag("compact_landscape_transport_strip"),
+  ) {
+    Column(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+      verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+      Slider(
+        value = uiState.timeline.playheadMs.toFloat().coerceIn(0f, totalMs.toFloat()),
+        onValueChange = {
+          onBeginScrub()
+          onPlayheadScrub(it.toLong())
+        },
+        onValueChangeFinished = onEndScrub,
+        valueRange = 0f..totalMs.toFloat(),
+        colors =
+          SliderDefaults.colors(
+            thumbColor = MaterialTheme.colorScheme.primary,
+            activeTrackColor = MaterialTheme.colorScheme.primary,
+            inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant,
+          ),
+        modifier = Modifier.fillMaxWidth().height(20.dp).testTag("playhead_slider"),
+      )
+
+      Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        FilledIconButton(
+          onClick = onTogglePlayPause,
+          enabled = previewState.hasPlayableMedia,
+          colors =
+            IconButtonDefaults.filledIconButtonColors(
+              containerColor = MaterialTheme.colorScheme.primary,
+              contentColor = MaterialTheme.colorScheme.onPrimary,
+              disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+              disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            ),
+          modifier = Modifier.minimumInteractiveComponentSize().testTag("preview_play_pause_button"),
+        ) {
+          Icon(
+            imageVector = if (previewState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+            contentDescription = stringResource(R.string.action_play_pause_preview),
+          )
+        }
+
+        AssistChip(
+          onClick = onResetZoom,
+          label = { Text("${zoomPct}%") },
+          modifier =
+            Modifier
+              .semantics { contentDescription = resetZoomCd }
+              .testTag("zoom_reset_chip"),
+        )
+
+        AssistChip(
+          onClick = onFitZoom,
+          leadingIcon = {
+            Icon(
+              imageVector = Icons.Default.FitScreen,
+              contentDescription = null,
+              modifier = Modifier.size(14.dp),
+            )
+          },
+          label = { Text(stringResource(R.string.action_fit_zoom)) },
+          modifier =
+            Modifier
+              .semantics { contentDescription = fitZoomCd }
+              .testTag("zoom_fit_button"),
+        )
+
+        FilterChip(
+          selected = uiState.ergonomics.snapEnabled,
+          onClick = onToggleSnap,
+          leadingIcon = {
+            Icon(
+              imageVector = Icons.Default.GridOn,
+              contentDescription = null,
+              modifier = Modifier.size(14.dp),
+            )
+          },
+          label = {
+            Text(
+              if (uiState.ergonomics.snapEnabled) {
+                stringResource(R.string.label_snap_on)
+              } else {
+                stringResource(R.string.label_snap_off)
+              },
+            )
+          },
+          modifier = Modifier.testTag("snap_toggle_chip"),
+        )
+
+        IconButton(
+          onClick = onStepBackFrame,
+          modifier = Modifier.minimumInteractiveComponentSize().testTag("transport_step_back_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.ChevronLeft,
+            contentDescription = stringResource(R.string.cd_transport_step_back),
+            tint = MaterialTheme.colorScheme.onSurface,
+          )
+        }
+
+        IconButton(
+          onClick = onStepForwardFrame,
+          modifier = Modifier.minimumInteractiveComponentSize().testTag("transport_step_forward_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.ChevronRight,
+            contentDescription = stringResource(R.string.cd_transport_step_forward),
+            tint = MaterialTheme.colorScheme.onSurface,
+          )
+        }
+
+        IconButton(
+          onClick = onSeekToStart,
+          modifier = Modifier.minimumInteractiveComponentSize().testTag("transport_start_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.SkipPrevious,
+            contentDescription = stringResource(R.string.cd_transport_start),
+            tint = MaterialTheme.colorScheme.onSurface,
+          )
+        }
+
+        IconButton(
+          onClick = onToggleLoop,
+          modifier = Modifier.minimumInteractiveComponentSize().testTag("transport_loop_button"),
+        ) {
+          Icon(
+            imageVector = Icons.Default.Repeat,
+            contentDescription = stringResource(R.string.cd_transport_loop),
+            tint =
+              if (isLoopEnabled) {
+                MaterialTheme.colorScheme.secondary
+              } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+              },
+          )
+        }
       }
     }
   }
@@ -800,6 +1106,7 @@ internal fun EditActionDeck(
   onOpenAudioTools: () -> Unit,
   onOpenSubtitlesBatch: () -> Unit,
   onOpenAttributesSnapshots: () -> Unit,
+  compact: Boolean = false,
 ) {
   val selectedClip = uiState.selectedClip
   val selectedTrack = selectedClip?.let { clip -> uiState.timeline.tracks.find { it.trackId == clip.trackId } }
@@ -813,7 +1120,7 @@ internal fun EditActionDeck(
   Surface(
     color = MaterialTheme.colorScheme.surface,
     tonalElevation = 2.dp,
-    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+    modifier = Modifier.fillMaxWidth().padding(top = if (compact) 1.dp else 4.dp),
   ) {
     Column(modifier = Modifier.fillMaxWidth()) {
       HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
@@ -822,8 +1129,11 @@ internal fun EditActionDeck(
           Modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(
+              horizontal = if (compact) 8.dp else 10.dp,
+              vertical = if (compact) 3.dp else 6.dp,
+            ),
+        horizontalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
         CapCutToolbarActionButton(

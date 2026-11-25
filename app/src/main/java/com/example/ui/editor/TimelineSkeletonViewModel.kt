@@ -307,6 +307,13 @@ class TimelineSkeletonViewModel(
     }
     exportQueueManager?.let { manager ->
       viewModelScope.launch {
+        manager.storageUpdateVersion.collect { version ->
+          if (version > 0L) {
+            refreshCacheStorageStatsInternal()
+          }
+        }
+      }
+      viewModelScope.launch {
         var prevTerminalSnapshot: List<Pair<String, ExportJobStatus>> = emptyList()
         manager.queue.collect { list ->
           val terminalSnapshot =
@@ -2300,15 +2307,25 @@ class TimelineSkeletonViewModel(
 
   fun clearTemporaryCache() {
     val manager = tempCacheStorageManager ?: return
-    val hasActiveExport =
-      exportQueue.value.any {
+    val activeJobs =
+      exportQueue.value.filter {
         it.status == ExportJobStatus.RUNNING || it.status == ExportJobStatus.QUEUED
       }
+    val hasActiveExport = activeJobs.isNotEmpty()
+    val activePaths = exportQueueManager?.activeExportFilePaths().orEmpty()
     val preserveDirs =
-      if (hasActiveExport) setOf(TempCacheStorageManager.DIR_EXPORT_STAGING) else emptySet()
+      if (hasActiveExport && activePaths.isEmpty()) {
+        setOf(TempCacheStorageManager.DIR_EXPORT_STAGING)
+      } else {
+        emptySet()
+      }
     _uiState.update { it.copy(isClearingCache = true) }
     viewModelScope.launch {
-      val updatedStats = manager.clearTemporaryCache(preserveDirectories = preserveDirs)
+      val updatedStats =
+        manager.clearTemporaryCachePreservingFiles(
+          preserveDirectories = preserveDirs,
+          preserveFilePaths = if (hasActiveExport) activePaths else emptySet(),
+        )
       thumbnailCache?.clear()
       waveformCache?.clearMemoryCache()
       _uiState.update { state ->
@@ -2368,6 +2385,7 @@ class TimelineSkeletonViewModel(
       }
       _uiState.update { it.copy(assets = updatedAssets, proxyProgress = null) }
       persistCurrentProjectAsync()
+      refreshCacheStorageStatsInternal()
       syncPreviewComposition()
     }
   }
@@ -3048,6 +3066,16 @@ class TimelineSkeletonViewModel(
         TimelineViewportErgonomics.MAX_ZOOM,
       )
     _uiState.update { it.copy(ergonomics = it.ergonomics.copy(zoomScale = clamped)) }
+  }
+
+  fun fitTimelineZoom(viewportWidthDp: Float) {
+    val durationMs = _uiState.value.timeline.totalDurationMs
+    val fitScale =
+      TimelineErgonomicsHelper.calculateFitZoomScale(
+        viewportWidthDp = viewportWidthDp,
+        totalDurationMs = durationMs,
+      )
+    setTimelineZoom(fitScale)
   }
 
   fun toggleSnapEnabled() {

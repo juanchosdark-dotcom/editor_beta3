@@ -4,10 +4,14 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCut
@@ -30,6 +34,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.core.model.ClipKind
@@ -48,15 +53,29 @@ internal fun TrimRangeSubPanel(
   onTrimEndToPlayhead: () -> Unit,
   onClose: () -> Unit,
   modifier: Modifier = Modifier,
+  fillAvailableHeight: Boolean = false,
+  maxContentHeight: Dp = 240.dp,
+  outerHorizontalPadding: Dp = 12.dp,
+  outerVerticalPadding: Dp = 4.dp,
 ) {
   Surface(
     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f),
     shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 12.dp, bottomEnd = 12.dp),
     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)),
-    modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).testTag("trim_subpanel"),
+    modifier =
+      modifier
+        .fillMaxWidth()
+        .let { if (fillAvailableHeight) it.fillMaxHeight() else it }
+        .padding(horizontal = outerHorizontalPadding, vertical = outerVerticalPadding)
+        .testTag("trim_subpanel"),
   ) {
     Column(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .let { if (fillAvailableHeight) it.fillMaxHeight() else it.heightIn(max = maxContentHeight) }
+          .verticalScroll(rememberScrollState())
+          .padding(horizontal = 12.dp, vertical = 8.dp),
       verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
       Row(

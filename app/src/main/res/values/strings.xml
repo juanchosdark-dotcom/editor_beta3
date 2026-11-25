@@ -270,4 +270,8 @@
     <string name="label_track_solo_short">Solo</string>
     <string name="label_track_gain_pct">Ganancia de pista: %1$d%%</string>
     <string name="label_track_muted_badge">MUTE</string>
+    <string name="action_fit_zoom">Ajustar</string>
+    <string name="cd_fit_zoom">Ajustar zoom a toda la línea de tiempo</string>
+    <string name="cd_reset_zoom">Restablecer zoom al 100%%</string>
+    <string name="label_timeline_zoom_badge">%1$d%% · 100%%</string>
 </resources>

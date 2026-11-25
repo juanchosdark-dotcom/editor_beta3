@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -95,7 +97,9 @@ fun FrameLineApp(
   }
 
   BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-    val useNavigationRail = maxWidth >= 720.dp
+    val isLandscapeViewport = maxWidth > maxHeight
+    val useNavigationRail = maxWidth >= 600.dp || isLandscapeViewport
+    val showRailLabels = maxHeight >= 480.dp
 
     if (useNavigationRail) {
       Row(
@@ -115,28 +119,37 @@ fun FrameLineApp(
         NavigationRail(
           containerColor = MaterialTheme.colorScheme.surface,
         ) {
-          StudioRoute.entries.forEach { destination ->
-            val isSelected = currentRoute == destination.route
-            NavigationRailItem(
-              selected = isSelected,
-              onClick = { navigateTopLevel(destination) },
-              alwaysShowLabel = true,
-              colors = railItemColors,
-              icon = {
-                RouteNavIcon(
-                  route = destination,
-                  selected = isSelected,
-                  activeExportCount = activeExportCount,
-                )
-              },
-              label = {
-                NavDestinationLabel(
-                  text = stringResource(destination.labelRes),
-                  selected = isSelected,
-                )
-              },
-              modifier = Modifier.testTag("nav_rail_${destination.route}"),
-            )
+          Column(
+            modifier = Modifier.fillMaxHeight().verticalScroll(rememberScrollState()),
+          ) {
+            StudioRoute.entries.forEach { destination ->
+              val isSelected = currentRoute == destination.route
+              NavigationRailItem(
+                selected = isSelected,
+                onClick = { navigateTopLevel(destination) },
+                alwaysShowLabel = showRailLabels,
+                colors = railItemColors,
+                icon = {
+                  RouteNavIcon(
+                    route = destination,
+                    selected = isSelected,
+                    activeExportCount = activeExportCount,
+                  )
+                },
+                label =
+                  if (showRailLabels) {
+                    {
+                      NavDestinationLabel(
+                        text = stringResource(destination.labelRes),
+                        selected = isSelected,
+                      )
+                    }
+                  } else {
+                    null
+                  },
+                modifier = Modifier.testTag("nav_rail_${destination.route}"),
+              )
+            }
           }
         }
         VerticalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)

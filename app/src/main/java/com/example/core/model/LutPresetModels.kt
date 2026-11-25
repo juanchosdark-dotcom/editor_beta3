@@ -41,6 +41,7 @@ data class EffectiveColorGrading(
   val midtones: Float = 0.0f,
   val highlights: Float = 0.0f,
   val blendOpacity: Float = 1.0f,
+  val depthBlur: Float = 0.0f,
 ) {
   val hasColorModifications: Boolean
     get() =
@@ -54,6 +55,7 @@ data class EffectiveColorGrading(
         kotlin.math.abs(midtones) > 0.01f ||
         kotlin.math.abs(highlights) > 0.01f ||
         vignette > 0.01f ||
+        depthBlur > 0.01f ||
         (activeLut != null && activeLut.id != BuiltInLutPresets.ID_NONE && lutStrength > 0.01f)
 }
 
@@ -203,6 +205,7 @@ object BuiltInLutPresets {
     midtones: Float = 0.0f,
     highlights: Float = 0.0f,
     blendOpacity: Float = 1.0f,
+    depthBlur: Float = 0.0f,
   ): EffectiveColorGrading {
     val layerBlend = ColorGradeBounds.clampBlendOpacity(blendOpacity)
     val preset = findById(lutPresetId)?.takeIf { it.id != ID_NONE }
@@ -230,6 +233,7 @@ object BuiltInLutPresets {
     val baseMidtones = ColorGradeBounds.clampMidtones(midtones) * layerBlend
     val baseHighlights = ColorGradeBounds.clampHighlights(highlights) * layerBlend
     val baseVignette = ColorGradeBounds.clampVignette(vignette) * layerBlend
+    val baseDepthBlur = ColorGradeBounds.clampDepthBlur(depthBlur) * layerBlend
 
     return EffectiveColorGrading(
       brightness = (baseBrightness + lutBrightness).coerceIn(-0.8f, 0.8f),
@@ -245,6 +249,7 @@ object BuiltInLutPresets {
       midtones = (baseMidtones + lutMidtones).coerceIn(-1.0f, 1.0f),
       highlights = (baseHighlights + lutHighlights).coerceIn(-1.0f, 1.0f),
       blendOpacity = layerBlend,
+      depthBlur = baseDepthBlur.coerceIn(0.0f, 1.0f),
     )
   }
 
@@ -263,6 +268,7 @@ object BuiltInLutPresets {
       midtones = cfg.midtones,
       highlights = cfg.highlights,
       blendOpacity = 1.0f,
+      depthBlur = cfg.depthBlur,
     )
 
   fun resolveEffectiveColor(cfg: AdjustmentClipConfig): EffectiveColorGrading =
@@ -280,5 +286,6 @@ object BuiltInLutPresets {
       midtones = cfg.midtones,
       highlights = cfg.highlights,
       blendOpacity = cfg.blendOpacity,
+      depthBlur = cfg.depthBlur,
     )
 }

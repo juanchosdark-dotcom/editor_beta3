@@ -84,17 +84,108 @@ class TempCacheStorageManager(
    * files inside [projectsRootDir]. Optionally preserves specified subdirectories (e.g. active export staging).
    */
   suspend fun clearTemporaryCache(preserveDirectories: Set<String> = emptySet()): CacheStorageStats =
+    clearTemporaryCachePreservingFiles(preserveDirectories = preserveDirectories, preserveFilePaths = emptySet())
+
+  /**
+   * Clears temporary files inside [cacheRootDir] without touching `.json` files in [projectsRootDir],
+   * preserving whole directories in [preserveDirectories] as well as specific active file paths
+   * (such as an in-flight export `.mp4` / `.tmp.mp4`) in [preserveFilePaths].
+   */
+  suspend fun clearTemporaryCachePreservingFiles(
+    preserveDirectories: Set<String> = emptySet(),
+    preserveFilePaths: Set<String> = emptySet(),
+  ): CacheStorageStats =
     withContext(ioDispatcher) {
+      val preservedCanonical =
+        preserveFilePaths
+          .filter { it.isNotBlank() }
+          .mapTo(mutableSetOf()) { path ->
+            runCatching { File(path).canonicalPath }.getOrElse { File(path).absolutePath }
+          }
+
       if (cacheRootDir.exists()) {
         cacheRootDir.listFiles().orEmpty().forEach { child ->
-          if (child.name !in preserveDirectories) {
+          if (child.name in preserveDirectories) {
+            return@forEach
+          }
+          if (preservedCanonical.isEmpty()) {
             child.deleteRecursively()
+          } else {
+            deleteChildExceptPreserved(child, preservedCanonical)
           }
         }
       }
       cacheRootDir.mkdirs()
       measureStorage()
     }
+
+  /**
+   * Removes orphaned intermediate `.tmp` / `.tmp.mp4` staging files inside `export_staging`
+   * without touching active exports in [activeFilePaths] or saved `.json` projects.
+   */
+  suspend fun cleanupOrphanStagingFiles(
+    activeFilePaths: Set<String> = emptySet(),
+  ): CacheStorageStats =
+    withContext(ioDispatcher) {
+      val preservedCanonical =
+        activeFilePaths
+          .filter { it.isNotBlank() }
+          .mapTo(mutableSetOf()) { path ->
+            runCatching { File(path).canonicalPath }.getOrElse { File(path).absolutePath }
+          }
+
+      listOf(exportStagingDir, File(cacheRootDir, "exports")).forEach { dir ->
+        if (dir.exists()) {
+          dir.walkTopDown()
+            .filter { file ->
+              file.isFile &&
+                (file.name.endsWith(".tmp.mp4", ignoreCase = true) ||
+                  file.name.endsWith(".tmp", ignoreCase = true))
+            }
+            .forEach { tmpFile ->
+              val canonical =
+                runCatching { tmpFile.canonicalPath }.getOrElse { tmpFile.absolutePath }
+              if (canonical !in preservedCanonical) {
+                tmpFile.delete()
+              }
+            }
+        }
+      }
+      measureStorage()
+    }
+
+  private fun deleteChildExceptPreserved(
+    target: File,
+    preservedCanonical: Set<String>,
+  ): Boolean {
+    val canonical = runCatching { target.canonicalPath }.getOrElse { target.absolutePath }
+    if (target.isFile) {
+      return if (canonical in preservedCanonical) {
+        true
+      } else {
+        target.delete()
+        false
+      }
+    }
+
+    val prefix = if (canonical.endsWith(File.separator)) canonical else canonical + File.separator
+    val hasPreservedDescendant = preservedCanonical.any { it == canonical || it.startsWith(prefix) }
+    if (!hasPreservedDescendant) {
+      target.deleteRecursively()
+      return false
+    }
+
+    var keptAny = false
+    target.listFiles().orEmpty().forEach { child ->
+      if (deleteChildExceptPreserved(child, preservedCanonical)) {
+        keptAny = true
+      }
+    }
+    if (!keptAny) {
+      target.delete()
+    }
+    return keptAny
+  }
 
   private fun sumDirectory(dir: File): Pair<Long, Int> {
     if (!dir.exists()) return 0L to 0

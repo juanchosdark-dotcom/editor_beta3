@@ -7,11 +7,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -58,6 +60,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -93,6 +96,11 @@ internal fun Media3PreviewPlayerCard(
   onDismissError: () -> Unit,
   onOpenMediaPicker: () -> Unit,
   modifier: Modifier = Modifier,
+  fillAvailableHeight: Boolean = false,
+  previewHeight: Dp = 180.dp,
+  compactDiagnostics: Boolean = false,
+  outerHorizontalPadding: Dp = 12.dp,
+  outerVerticalPadding: Dp = 4.dp,
 ) {
   val isInspection = LocalInspectionMode.current
   val lifecycleOwner = LocalLifecycleOwner.current
@@ -139,7 +147,11 @@ internal fun Media3PreviewPlayerCard(
   val activeLutTint = colorPipeline.combinedGrade.activeLut
 
   Column(
-    modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+    modifier =
+      modifier
+        .fillMaxWidth()
+        .let { if (fillAvailableHeight) it.fillMaxHeight() else it }
+        .padding(horizontal = outerHorizontalPadding, vertical = outerVerticalPadding),
     verticalArrangement = Arrangement.spacedBy(4.dp),
   ) {
     Surface(
@@ -155,13 +167,16 @@ internal fun Media3PreviewPlayerCard(
               MaterialTheme.colorScheme.outline
             },
         ),
-      modifier = Modifier.fillMaxWidth(),
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .let { if (fillAvailableHeight) it.weight(1f) else it },
     ) {
       Box(
         modifier =
           Modifier
             .fillMaxWidth()
-            .height(166.dp)
+            .let { if (fillAvailableHeight) it.fillMaxHeight() else it.height(previewHeight) }
             .padding(2.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerLowest),
@@ -254,31 +269,40 @@ internal fun Media3PreviewPlayerCard(
               border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
               modifier = Modifier.fillMaxSize(),
             ) {
-              Box(modifier = Modifier.fillMaxSize()) {
-                Text(
-                  text = stringResource(R.string.label_viewer_no_signal),
-                  style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                  color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
-                  modifier = Modifier.align(Alignment.TopStart).padding(horizontal = 8.dp, vertical = 6.dp),
-                )
+              BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val isVeryShort = maxHeight < 132.dp
+                if (!isVeryShort) {
+                  Text(
+                    text = stringResource(R.string.label_viewer_no_signal),
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                    modifier = Modifier.align(Alignment.TopStart).padding(horizontal = 8.dp, vertical = 6.dp),
+                  )
+                }
 
                 Column(
-                  modifier = Modifier.align(Alignment.Center).padding(horizontal = 16.dp),
+                  modifier =
+                    Modifier
+                      .align(Alignment.Center)
+                      .verticalScroll(rememberScrollState())
+                      .padding(horizontal = 12.dp, vertical = if (isVeryShort) 4.dp else 8.dp),
                   horizontalAlignment = Alignment.CenterHorizontally,
-                  verticalArrangement = Arrangement.spacedBy(6.dp),
+                  verticalArrangement = Arrangement.spacedBy(if (isVeryShort) 2.dp else 6.dp),
                 ) {
-                  Icon(
-                    imageVector = Icons.Default.Videocam,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.size(24.dp),
-                  )
+                  if (!isVeryShort) {
+                    Icon(
+                      imageVector = Icons.Default.Videocam,
+                      contentDescription = null,
+                      tint = MaterialTheme.colorScheme.secondary,
+                      modifier = Modifier.size(22.dp),
+                    )
+                  }
                   Text(
                     text = previewState.statusNote ?: stringResource(R.string.label_no_preview_media),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
-                    maxLines = 2,
+                    maxLines = if (isVeryShort) 1 else 2,
                     overflow = TextOverflow.Ellipsis,
                   )
                   AssistChip(
@@ -323,19 +347,21 @@ internal fun Media3PreviewPlayerCard(
       }
     }
 
-    previewState.diagnosticNotice?.let { notice ->
-      Surface(
-        color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = Modifier.fillMaxWidth().testTag("preview_diagnostic_notice"),
-      ) {
-        Text(
-          text = notice.message,
-          style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.secondary,
-          modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-        )
+    if (!compactDiagnostics) {
+      previewState.diagnosticNotice?.let { notice ->
+        Surface(
+          color = MaterialTheme.colorScheme.surface,
+          shape = RoundedCornerShape(8.dp),
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+          modifier = Modifier.fillMaxWidth().testTag("preview_diagnostic_notice"),
+        ) {
+          Text(
+            text = notice.message,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.secondary,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+          )
+        }
       }
     }
 
@@ -412,6 +438,11 @@ internal fun KeyframeInspectorStrip(
   ) -> Unit,
   onEndEdit: () -> Unit,
   onClose: () -> Unit,
+  modifier: Modifier = Modifier,
+  fillAvailableHeight: Boolean = false,
+  maxContentHeight: Dp = 280.dp,
+  outerHorizontalPadding: Dp = 12.dp,
+  outerVerticalPadding: Dp = 4.dp,
 ) {
   if (selectedClip.kind != ClipKind.VIDEO && selectedClip.kind != ClipKind.AUDIO) return
   val isVideo = selectedClip.kind == ClipKind.VIDEO
@@ -436,13 +467,18 @@ internal fun KeyframeInspectorStrip(
     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.94f),
     shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 12.dp, bottomEnd = 12.dp),
     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)),
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).testTag("keyframes_subpanel"),
+    modifier =
+      modifier
+        .fillMaxWidth()
+        .let { if (fillAvailableHeight) it.fillMaxHeight() else it }
+        .padding(horizontal = outerHorizontalPadding, vertical = outerVerticalPadding)
+        .testTag("keyframes_subpanel"),
   ) {
     Column(
       modifier =
         Modifier
           .fillMaxWidth()
-          .heightIn(max = 280.dp)
+          .let { if (fillAvailableHeight) it.fillMaxHeight() else it.heightIn(max = maxContentHeight) }
           .verticalScroll(rememberScrollState())
           .padding(horizontal = 12.dp, vertical = 8.dp),
       verticalArrangement = Arrangement.spacedBy(6.dp),

@@ -65,6 +65,7 @@ import com.example.core.export.ExportEstimator
 import com.example.core.export.ExportJobStatus
 import com.example.core.export.ExportQueueItem
 import com.example.core.export.ExportRange
+import com.example.core.export.RangeSliceHelper
 import com.example.core.media.model.ExportPreset
 import com.example.core.model.ClipKind
 import com.example.core.model.TimelineMarker
@@ -118,18 +119,15 @@ fun ExportScreen(
   val selectedRangeDurationMs =
     remember(rangeMode, sortedMarkers, startBoundaryIdx, endBoundaryIdx, totalDurationMs) {
       when (rangeMode) {
-        ExportRangeSelectionMode.FULL, ExportRangeSelectionMode.CHAPTERS -> totalDurationMs
-        ExportRangeSelectionMode.BETWEEN_MARKERS -> {
-          val startMs =
-            if (startBoundaryIdx < 0) 0L else sortedMarkers.getOrNull(startBoundaryIdx)?.positionMs ?: 0L
-          val endMs =
-            if (endBoundaryIdx >= sortedMarkers.size) {
-              totalDurationMs
-            } else {
-              sortedMarkers.getOrNull(endBoundaryIdx)?.positionMs ?: totalDurationMs
-            }
-          (endMs - startMs).coerceAtLeast(0L)
-        }
+        ExportRangeSelectionMode.FULL, ExportRangeSelectionMode.CHAPTERS ->
+          RangeSliceHelper.calculateExportDurationMs(ExportRange.FullTimeline, totalDurationMs)
+        ExportRangeSelectionMode.BETWEEN_MARKERS ->
+          RangeSliceHelper.resolveMarkerSelectionBounds(
+            sortedMarkers = sortedMarkers,
+            startBoundaryIndex = startBoundaryIdx,
+            endBoundaryIndex = endBoundaryIdx,
+            totalDurationMs = totalDurationMs,
+          ).durationMs
       }
     }
 
@@ -480,15 +478,14 @@ fun ExportScreen(
                   ExportRangeSelectionMode.FULL -> onEnqueueRange(ExportRange.FullTimeline)
                   ExportRangeSelectionMode.CHAPTERS -> onEnqueueChapters()
                   ExportRangeSelectionMode.BETWEEN_MARKERS -> {
-                    val startMs =
-                      if (startBoundaryIdx < 0) 0L else sortedMarkers[startBoundaryIdx].positionMs
-                    val endMs =
-                      if (endBoundaryIdx >= sortedMarkers.size) {
-                        totalDurationMs
-                      } else {
-                        sortedMarkers[endBoundaryIdx].positionMs
-                      }
-                    if (endMs > startMs) {
+                    val bounds =
+                      RangeSliceHelper.resolveMarkerSelectionBounds(
+                        sortedMarkers = sortedMarkers,
+                        startBoundaryIndex = startBoundaryIdx,
+                        endBoundaryIndex = endBoundaryIdx,
+                        totalDurationMs = totalDurationMs,
+                      )
+                    if (bounds.durationMs > 0L) {
                       val startLabel =
                         if (startBoundaryIdx < 0) "Inicio" else sortedMarkers[startBoundaryIdx].label
                       val endLabel =
@@ -501,8 +498,8 @@ fun ExportScreen(
                         ExportRange.MarkerSpan(
                           startMarkerId = sortedMarkers.getOrNull(startBoundaryIdx)?.markerId,
                           endMarkerId = sortedMarkers.getOrNull(endBoundaryIdx)?.markerId,
-                          startMs = startMs,
-                          endMs = endMs,
+                          startMs = bounds.startMs,
+                          endMs = bounds.endMs,
                           label = "$startLabel→$endLabel",
                         ),
                       )

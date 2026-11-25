@@ -328,6 +328,67 @@ class PersistenceAndHistoryTest {
       }
     }
 
+  @Test
+  fun `selective cache cleanup preserves active export files while removing stale staging, orphans and proxies`() =
+    runTest(testDispatcher) {
+      val tempRoot = Files.createTempDirectory("frameline_selective_cache_").toFile()
+      val filesDir = File(tempRoot, "files")
+      val cacheDir = File(tempRoot, "cache").apply { mkdirs() }
+      try {
+        val repo = ProjectRepository(File(filesDir, "projects"), ioDispatcher = testDispatcher)
+        repo.saveProject(TimelineSkeletonViewModel.createInitialProjectDocument())
+        val cacheMgr = TempCacheStorageManager(cacheDir, repo.projectsDir, ioDispatcher = testDispatcher)
+
+        cacheMgr.proxiesDir.apply { mkdirs() }.resolve("p1.mp4").writeBytes(ByteArray(1_500))
+        cacheMgr.tempMediaDir.apply { mkdirs() }.resolve("tmp_clip.mp4").writeBytes(ByteArray(3_000))
+        val activeFile =
+          cacheMgr.exportStagingDir.apply { mkdirs() }.resolve("active_job.mp4").apply {
+            writeBytes(ByteArray(2_048))
+          }
+        val activeTmp =
+          cacheMgr.exportStagingDir.resolve(".active_job_s1.tmp.mp4").apply {
+            writeBytes(ByteArray(512))
+          }
+        val staleFinished =
+          cacheMgr.exportStagingDir.resolve("old_finished.mp4").apply {
+            writeBytes(ByteArray(4_096))
+          }
+        val orphanTmp =
+          cacheMgr.exportStagingDir.resolve(".crashed_s99.tmp.mp4").apply {
+            writeBytes(ByteArray(1_024))
+          }
+
+        val initialStats = cacheMgr.measureStorage()
+        assertEquals(12_180L, initialStats.totalCacheBytes)
+        assertEquals(7_680L, initialStats.exportScratchBytes)
+
+        val afterOrphanCleanup =
+          cacheMgr.cleanupOrphanStagingFiles(
+            activeFilePaths = setOf(activeFile.absolutePath, activeTmp.absolutePath),
+          )
+        assertFalse(orphanTmp.exists())
+        assertTrue(activeTmp.exists())
+        assertTrue(staleFinished.exists())
+        assertEquals(6_656L, afterOrphanCleanup.exportScratchBytes)
+
+        val afterSelectiveClear =
+          cacheMgr.clearTemporaryCachePreservingFiles(
+            preserveFilePaths = setOf(activeFile.absolutePath, activeTmp.absolutePath),
+          )
+        assertTrue(activeFile.exists())
+        assertTrue(activeTmp.exists())
+        assertFalse(staleFinished.exists())
+        assertEquals(0L, afterSelectiveClear.proxiesBytes)
+        assertEquals(0L, afterSelectiveClear.tempMediaBytes)
+        assertEquals(2_560L, afterSelectiveClear.exportScratchBytes)
+        assertEquals(2_560L, afterSelectiveClear.totalCacheBytes)
+        assertEquals(1, afterSelectiveClear.savedProjectCount)
+        assertTrue(repo.projectFileFor("proj_demo").exists())
+      } finally {
+        tempRoot.deleteRecursively()
+      }
+    }
+
   private class FakeResourceGuard : ResourceGuard {
     private val _snapshot =
       MutableStateFlow(

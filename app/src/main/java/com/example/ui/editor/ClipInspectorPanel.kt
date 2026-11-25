@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -53,6 +54,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
@@ -119,6 +121,10 @@ internal fun ClipInspectorPanel(
   onOpenSubtitlesSheet: () -> Unit,
   onClose: () -> Unit,
   modifier: Modifier = Modifier,
+  fillAvailableHeight: Boolean = false,
+  maxContentHeight: Dp = 220.dp,
+  outerHorizontalPadding: Dp = 12.dp,
+  outerVerticalPadding: Dp = 4.dp,
 ) {
   val haptic = LocalHapticFeedback.current
   val trackColors = LocalTrackColors.current
@@ -179,10 +185,16 @@ internal fun ClipInspectorPanel(
     modifier =
       modifier
         .fillMaxWidth()
-        .padding(horizontal = 12.dp, vertical = 4.dp)
+        .let { if (fillAvailableHeight) it.fillMaxHeight() else it.heightIn(max = maxContentHeight) }
+        .padding(horizontal = outerHorizontalPadding, vertical = outerVerticalPadding)
         .testTag("adjustments_subpanel"),
   ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .let { if (fillAvailableHeight) it.fillMaxHeight() else it },
+    ) {
       // Pinned Active Clip Context Header (always stays visible while scrolling controls)
       Row(
         modifier =
@@ -342,7 +354,7 @@ internal fun ClipInspectorPanel(
           modifier =
             Modifier
               .fillMaxWidth()
-              .heightIn(max = 208.dp)
+              .weight(1f, fill = fillAvailableHeight)
               .verticalScroll(rememberScrollState())
               .padding(horizontal = 12.dp, vertical = 8.dp),
           verticalArrangement = Arrangement.spacedBy(6.dp),

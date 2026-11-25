@@ -56,6 +56,12 @@ enum class ClipKind {
   ADJUSTMENT,
 }
 
+@JsonClass(generateAdapter = true)
+data class SpeedCurvePoint(
+  val normalizedTime: Float,
+  val speed: Float,
+)
+
 /**
  * Non-destructive timeline clip supporting Video, Audio, Subtitles, and Adjustment Layers.
  *
@@ -80,12 +86,16 @@ data class TimelineClip(
   val audioConfig: AudioClipConfig? = null,
   val subtitleConfig: SubtitleClipConfig? = null,
   val adjustmentConfig: AdjustmentClipConfig? = null,
+  val speedCurve: List<SpeedCurvePoint> = emptyList(),
 ) {
   init {
     require(timelineStartMs >= 0L) { "timelineStartMs must be >= 0" }
     require(timelineEndMs > timelineStartMs) { "timelineEndMs must be > timelineStartMs" }
     require(speed > 0f) { "speed must be > 0" }
   }
+
+  val hasVariableSpeed: Boolean
+    get() = speedCurve.size >= 2
 
   val durationMs: Long
     get() = timelineEndMs - timelineStartMs
@@ -177,6 +187,7 @@ data class VideoClipConfig(
   val shadows: Float = 0.0f,
   val midtones: Float = 0.0f,
   val highlights: Float = 0.0f,
+  val depthBlur: Float = 0.0f,
 ) {
   fun evaluatePropertiesAt(offsetMs: Long): EvaluatedClipProperties =
     ClipKeyframeEvaluator.evaluateAt(
@@ -245,6 +256,7 @@ data class AdjustmentClipConfig(
   val midtones: Float = 0.0f,
   val highlights: Float = 0.0f,
   val blendOpacity: Float = 1.0f,
+  val depthBlur: Float = 0.0f,
 )
 
 @JsonClass(generateAdapter = true)
